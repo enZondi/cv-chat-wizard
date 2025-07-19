@@ -13,9 +13,11 @@ serve(async (req) => {
   }
 
   try {
-    const { message } = await req.json();
+    console.log('📥 Received chat request');
+    const { message, assistantId } = await req.json();
 
     if (!message) {
+      console.log('❌ No message provided');
       return new Response(
         JSON.stringify({ error: 'Message is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -25,15 +27,54 @@ serve(async (req) => {
     const azureOpenAIKey = Deno.env.get('AZURE_OPENAI_API_KEY');
     const azureOpenAIEndpoint = "https://round2letsgo.openai.azure.com/";
     const azureOpenAIVersion = "2024-05-01-preview";
-    const assistantId = "asst_pX2hJzVdruY2vW0rte3nFiNr"; // Your assistant ID
+    
+    // Use provided assistant ID or create a new assistant
+    let finalAssistantId = assistantId;
 
     if (!azureOpenAIKey) {
+      console.log('❌ Azure OpenAI API key not configured');
       return new Response(
         JSON.stringify({ error: 'Azure OpenAI API key not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    console.log('✅ API key found, creating/using assistant...');
+
+    // If no assistant ID provided, create a new assistant
+    if (!finalAssistantId) {
+      console.log('🤖 Creating new assistant...');
+      const assistantResponse = await fetch(`${azureOpenAIEndpoint}openai/assistants?api-version=${azureOpenAIVersion}`, {
+        method: 'POST',
+        headers: {
+          'api-key': azureOpenAIKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: "gpt-4.1round2letsgo",
+          name: "CV Assistant",
+          instructions: `You are a helpful assistant that answers questions about the uploaded CV. Be professional, concise, and accurate. If asked about information not in the CV, politely say you can only discuss what's in the uploaded CV.`,
+          tools: [{"type":"file_search"}],
+          tool_resources: {"file_search":{"vector_store_ids":["vs_pX2hJzVdruY2vW0rte3nFiNr"]}},
+          temperature: 0.7
+        }),
+      });
+
+      if (!assistantResponse.ok) {
+        const error = await assistantResponse.text();
+        console.error('Assistant creation failed:', error);
+        return new Response(
+          JSON.stringify({ error: 'Failed to create assistant' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const assistant = await assistantResponse.json();
+      finalAssistantId = assistant.id;
+      console.log('✅ Assistant created with ID:', finalAssistantId);
+    }
+
+    console.log('🔄 Creating thread...');
     // Create thread
     const threadResponse = await fetch(`${azureOpenAIEndpoint}openai/threads?api-version=${azureOpenAIVersion}`, {
       method: 'POST',
@@ -85,7 +126,7 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        assistant_id: assistantId
+        assistant_id: finalAssistantId
       }),
     });
 
